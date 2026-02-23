@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"polis/gate/internal/bead"
@@ -23,18 +24,24 @@ func run(args []string) int {
 		return 0
 	}
 
-	if args[0] != "check" {
+	switch args[0] {
+	case "check":
+		return runCheck(args[1:])
+	case "history":
+		return runHistory(args[1:])
+	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		printUsage()
 		return 1
 	}
+}
 
-	// Parse check arguments
+func runCheck(args []string) int {
 	var repoPath, level, citizen string
 	var jsonOutput bool
 
 	level = pipeline.LevelStandard
-	i := 1
+	i := 0
 	for i < len(args) {
 		switch args[i] {
 		case "--level":
@@ -75,7 +82,6 @@ func run(args []string) int {
 		return 1
 	}
 
-	// Resolve citizen
 	if citizen == "" {
 		citizen = os.Getenv("POLIS_CITIZEN")
 	}
@@ -88,7 +94,6 @@ func run(args []string) int {
 
 	v := pipeline.Run(context.Background(), repoPath, level, citizen)
 
-	// Record verdict as a bead (if bd is available)
 	if beadID := bead.Record(v); beadID != "" {
 		v.Bead = beadID
 	}
@@ -104,16 +109,89 @@ func run(args []string) int {
 	return v.ExitCode
 }
 
+func runHistory(args []string) int {
+	if _, err := exec.LookPath("bd"); err != nil {
+		fmt.Fprintln(os.Stderr, "gate history requires bd (beads) to be installed")
+		return 1
+	}
+
+	var repo, citizen string
+	limit := 20
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--repo":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--repo requires a value")
+				return 1
+			}
+			repo = args[i]
+		case "--citizen":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--citizen requires a value")
+				return 1
+			}
+			citizen = args[i]
+		case "--limit":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--limit requires a value")
+				return 1
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintln(os.Stderr, "--limit must be a positive integer")
+				return 1
+			}
+			limit = n
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\n", args[i])
+				return 1
+			}
+		}
+		i++
+	}
+
+	bdArgs := []string{"search", "gate", "--type", "gate", "--sort", "created", "--reverse", "--limit", strconv.Itoa(limit)}
+	if repo != "" {
+		bdArgs = append(bdArgs, "--label", "repo:"+repo)
+	}
+	if citizen != "" {
+		bdArgs = append(bdArgs, "--assignee", citizen)
+	}
+
+	cmd := exec.Command("bd", bdArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "bd search failed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func printUsage() {
 	fmt.Println(`gate — quality gate for Polis
 
 Usage:
   gate check <repo-path> [flags]
+  gate history [flags]
 
-Flags:
+Check flags:
   --level quick|standard|deep   Check level (default: standard)
   --json                        Output verdict as JSON
-  --citizen <name>              Set actor name`)
+  --citizen <name>              Set actor name
+
+History flags:
+  --repo <name>                 Filter by repo name
+  --citizen <name>              Filter by citizen
+  --limit N                     Max results (default: 20)`)
 }
 
 func printPretty(v verdict.Verdict) {
