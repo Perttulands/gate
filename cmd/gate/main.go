@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"polis/gate/internal/bead"
 	"polis/gate/internal/pipeline"
 	"polis/gate/internal/verdict"
 )
@@ -87,6 +88,11 @@ func run(args []string) int {
 
 	v := pipeline.Run(context.Background(), repoPath, level, citizen)
 
+	// Record verdict as a bead (if bd is available)
+	if beadID := bead.Record(v); beadID != "" {
+		v.Bead = beadID
+	}
+
 	if jsonOutput {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -120,17 +126,22 @@ func printPretty(v verdict.Verdict) {
 
 	for _, g := range v.Gates {
 		gIcon := "\033[32m✓\033[0m"
-		if !g.Pass {
+		if g.Skipped {
+			gIcon = "\033[33m-\033[0m"
+		} else if !g.Pass {
 			gIcon = "\033[31m✗\033[0m"
 		}
 		fmt.Printf("  %s %-20s %dms\n", gIcon, g.Name, g.DurationMs)
-		if !g.Pass && g.Output != "" {
+		if !g.Pass && !g.Skipped && g.Output != "" {
 			for _, line := range strings.Split(g.Output, "\n") {
 				if line != "" {
 					fmt.Printf("    %s\n", line)
 				}
 			}
 		}
+	}
+	if v.Bead != "" {
+		fmt.Printf("\nbead: %s\n", v.Bead)
 	}
 	fmt.Println()
 }

@@ -6,8 +6,17 @@ import "time"
 type GateResult struct {
 	Name       string `json:"name"`
 	Pass       bool   `json:"pass"`
+	Skipped    bool   `json:"skipped,omitempty"`
 	Output     string `json:"output,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
+	Findings   *Findings `json:"findings,omitempty"`
+}
+
+// Findings holds counts of issues by severity.
+type Findings struct {
+	Errors   int `json:"errors"`
+	Warnings int `json:"warnings"`
+	Info     int `json:"info"`
 }
 
 // Verdict is the final output of a gate check run.
