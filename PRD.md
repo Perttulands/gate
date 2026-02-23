@@ -2,7 +2,9 @@
 
 ## What It Is
 
-The guard at the merge. Before code lands on main, `gate` runs quality checks and produces a verdict: pass, fail, or needs review. Every verdict is recorded as a bead so the city remembers what was checked and why.
+Gate protects main. Before code lands, `gate` runs quality checks and produces a verdict: pass, fail, or needs review. Every verdict is recorded as a bead so the city remembers what was checked and why.
+
+Gate is simple and focused. It does not learn, does not orchestrate, does not decide what to do with a failure. It checks and reports. The caller (`work`, a human, a script) decides what happens next.
 
 ## CLI
 
