@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"polis/gate/internal/bead"
+	"polis/gate/internal/city"
 	"polis/gate/internal/pipeline"
 	"polis/gate/internal/verdict"
 )
@@ -27,6 +29,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "check":
 		return runCheck(args[1:])
+	case "city":
+		return runCity(args[1:])
 	case "history":
 		return runHistory(args[1:])
 	default:
@@ -109,6 +113,90 @@ func runCheck(args []string) int {
 	return v.ExitCode
 }
 
+func runCity(args []string) int {
+	var repoPath, installAt, citizen string
+	var jsonOutput, skipStandalone bool
+	standaloneTimeout := 120 * time.Second
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--install-at":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--install-at requires a value")
+				return city.ExitInvalid
+			}
+			installAt = args[i]
+		case "--skip-standalone":
+			skipStandalone = true
+		case "--standalone-timeout":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--standalone-timeout requires a value")
+				return city.ExitInvalid
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil || d <= 0 {
+				fmt.Fprintf(os.Stderr, "invalid --standalone-timeout %q: use duration like 120s\n", args[i])
+				return city.ExitInvalid
+			}
+			standaloneTimeout = d
+		case "--json":
+			jsonOutput = true
+		case "--citizen":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--citizen requires a value")
+				return city.ExitInvalid
+			}
+			citizen = args[i]
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\n", args[i])
+				return city.ExitInvalid
+			}
+			if repoPath == "" {
+				repoPath = args[i]
+			}
+		}
+		i++
+	}
+
+	if repoPath == "" {
+		fmt.Fprintln(os.Stderr, "repo path required: gate city <repo-path>")
+		return city.ExitInvalid
+	}
+
+	if citizen == "" {
+		citizen = os.Getenv("POLIS_CITIZEN")
+	}
+	if citizen == "" {
+		citizen = gitUserName()
+	}
+	if citizen == "" {
+		citizen = "unknown"
+	}
+
+	v := city.Run(context.Background(), repoPath, city.Options{
+		InstallAt:         installAt,
+		SkipStandalone:    skipStandalone,
+		StandaloneTimeout: standaloneTimeout,
+	})
+	if beadID := bead.RecordCity(v, citizen); beadID != "" {
+		v.Bead = beadID
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(v)
+	} else {
+		printPrettyCity(v)
+	}
+	return v.ExitCode
+}
+
 func runHistory(args []string) int {
 	if _, err := exec.LookPath("bd"); err != nil {
 		fmt.Fprintln(os.Stderr, "gate history requires bd (beads) to be installed")
@@ -181,10 +269,18 @@ func printUsage() {
 
 Usage:
   gate check <repo-path> [flags]
+  gate city <repo-path> [flags]
   gate history [flags]
 
 Check flags:
   --level quick|standard|deep   Check level (default: standard)
+  --json                        Output verdict as JSON
+  --citizen <name>              Set actor name
+
+City flags:
+  --install-at <path>           Also run split check against install path
+  --skip-standalone             Skip standalone check (status=skip)
+  --standalone-timeout <dur>    Timeout for standalone_check (default: 120s)
   --json                        Output verdict as JSON
   --citizen <name>              Set actor name
 
@@ -220,6 +316,33 @@ func printPretty(v verdict.Verdict) {
 	}
 	if v.Bead != "" {
 		fmt.Printf("\nbead: %s\n", v.Bead)
+	}
+	fmt.Println()
+}
+
+func printPrettyCity(v city.Verdict) {
+	color := "\033[32m✓ PASS\033[0m"
+	if v.Status == "warn" {
+		color = "\033[33m! WARN\033[0m"
+	}
+	if v.Status == "fail" {
+		color = "\033[31m✗ FAIL\033[0m"
+	}
+	fmt.Printf("\n%s  %s (city)\n\n", color, v.Repo)
+
+	for _, c := range v.Checks {
+		icon := "\033[32m✓\033[0m"
+		if c.Status == city.StatusSkip {
+			icon = "\033[33m-\033[0m"
+		} else if c.Status == city.StatusFail {
+			icon = "\033[31m✗\033[0m"
+		}
+		fmt.Printf("  %s %-12s %dms  %s\n", icon, c.Name, c.DurationMs, c.Detail)
+	}
+
+	fmt.Printf("\nsummary: pass=%d fail=%d skip=%d\n", v.Summary.Pass, v.Summary.Fail, v.Summary.Skip)
+	if v.Bead != "" {
+		fmt.Printf("bead: %s\n", v.Bead)
 	}
 	fmt.Println()
 }
