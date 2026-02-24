@@ -1,0 +1,8 @@
+# Local issue tracking data (Polis-owned, not part of upstream gate source)
+.beads/
+
+# Local UI/cache state
+.bv/
+
+# Local build output
+gate
