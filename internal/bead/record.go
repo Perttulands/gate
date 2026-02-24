@@ -28,10 +28,7 @@ func Record(v verdict.Verdict) string {
 	labels := fmt.Sprintf("tool:gate,status:%s,repo:%s,level:%s", status, v.Repo, v.Level)
 	description := formatCheckDescription(v)
 
-	if beadID := createWithBR(title, labels, description, v.Citizen); beadID != "" {
-		return beadID
-	}
-	return createWithBD("gate", title, labels, description, v.Citizen)
+	return createWithBR(title, labels, description, v.Citizen)
 }
 
 // RecordCity creates a bead for a gate city verdict.
@@ -39,10 +36,7 @@ func RecordCity(v city.Verdict, citizen string) string {
 	title := fmt.Sprintf("gate city: %s (%s)", v.Repo, v.Status)
 	labels := fmt.Sprintf("tool:gate,kind:city,status:%s,repo:%s", v.Status, v.Repo)
 	description := formatCityDescription(v)
-	if beadID := createWithBR(title, labels, description, citizen); beadID != "" {
-		return beadID
-	}
-	return createWithBD("gate", title, labels, description, citizen)
+	return createWithBR(title, labels, description, citizen)
 }
 
 func createWithBR(title, labels, description, citizen string) string {
@@ -67,27 +61,6 @@ func createWithBR(title, labels, description, citizen string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func createWithBD(issueType, title, labels, description, citizen string) string {
-	if _, err := lookPath("bd"); err != nil {
-		return ""
-	}
-	args := []string{
-		"create",
-		"--type", issueType,
-		"--title", title,
-		"--labels", labels,
-		"--description", description,
-		"--silent",
-	}
-	if citizen != "" && citizen != "unknown" {
-		args = append(args, "-a", citizen)
-	}
-	out, err := runCmd("bd", args...)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
 
 func formatCheckDescription(v verdict.Verdict) string {
 	var lines []string

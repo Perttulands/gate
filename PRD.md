@@ -61,15 +61,15 @@ Exit codes: 0 = pass, 1 = fail, 2 = needs human review.
 
 Every verdict creates a bead:
 ```
-bd create --type gate --actor $POLIS_CITIZEN --labels "tool:gate,status:pass,repo:centurion,level:standard"
+br create "gate check: pass" -t chore -a $POLIS_CITIZEN -l "tool:gate,status:pass,repo:centurion,level:standard"
 ```
 
-This means `gate history` is just `bd search --type gate` — the history is in beads, not a separate database.
+This means `gate history` is just `br list` filtered by gate type — the history is in beads, not a separate database.
 
 ## Technical
 
 - **Language:** Go
-- **Dependencies:** truthsayer (optional), ubs (optional), bd (optional)
+- **Dependencies:** truthsayer (optional), ubs (optional), br (optional)
 - **Auto-detection:** scans repo for test runners, linters, configs
 - **Zero-config:** works on any repo with sensible defaults
 - **Config:** optional `gate.toml` in repo root for overrides

@@ -51,15 +51,12 @@ func TestRecordCity_UsesBRWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestRecord_FallsBackToBD(t *testing.T) {
+func TestRecord_UsesBR(t *testing.T) {
 	defer resetHooksForTest()
 
 	lookPath = func(name string) (string, error) {
 		if name == "br" {
-			return "", errors.New("missing")
-		}
-		if name == "bd" {
-			return "/usr/bin/bd", nil
+			return "/usr/bin/br", nil
 		}
 		return "", errors.New("missing")
 	}
@@ -69,7 +66,7 @@ func TestRecord_FallsBackToBD(t *testing.T) {
 	runCmd = func(name string, args ...string) ([]byte, error) {
 		gotName = name
 		gotArgs = append([]string{}, args...)
-		return []byte("bd-9\n"), nil
+		return []byte("br-9\n"), nil
 	}
 
 	id := Record(verdict.Verdict{
@@ -80,14 +77,34 @@ func TestRecord_FallsBackToBD(t *testing.T) {
 		Gates:   []verdict.GateResult{{Name: "tests", Pass: false}},
 	})
 
-	if id != "bd-9" {
-		t.Fatalf("expected bd-9 id, got %q", id)
+	if id != "br-9" {
+		t.Fatalf("expected br-9 id, got %q", id)
 	}
-	if gotName != "bd" {
-		t.Fatalf("expected bd command, got %q", gotName)
+	if gotName != "br" {
+		t.Fatalf("expected br command, got %q", gotName)
 	}
-	if !strings.Contains(strings.Join(gotArgs, " "), "--type gate") {
-		t.Fatalf("expected gate type args, got %v", gotArgs)
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "gate gate") {
+		t.Fatalf("expected title in args: %v", gotArgs)
+	}
+}
+
+func TestRecord_NoBRReturnsEmpty(t *testing.T) {
+	defer resetHooksForTest()
+
+	lookPath = func(name string) (string, error) { return "", errors.New("missing") }
+	runCmd = func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("runCmd should not be called when br unavailable")
+		return nil, nil
+	}
+
+	id := Record(verdict.Verdict{
+		Pass:  true,
+		Level: "quick",
+		Repo:  "gate",
+	})
+	if id != "" {
+		t.Fatalf("expected empty id, got %q", id)
 	}
 }
 
