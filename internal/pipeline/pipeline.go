@@ -28,13 +28,15 @@ func ValidLevel(level string) bool {
 func Run(ctx context.Context, repoPath, level, citizen string) verdict.Verdict {
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
+		setupGates := []verdict.GateResult{{Name: "setup", Pass: false, Output: err.Error()}}
 		return verdict.Verdict{
 			Pass:     false,
+			Score:    verdict.ComputeScore(setupGates),
 			Level:    level,
 			Citizen:  citizen,
 			Repo:     repoPath,
 			ExitCode: verdict.ExitFail,
-			Gates:    []verdict.GateResult{{Name: "setup", Pass: false, Output: err.Error()}},
+			Gates:    setupGates,
 		}
 	}
 
@@ -50,11 +52,21 @@ func Run(ctx context.Context, repoPath, level, citizen string) verdict.Verdict {
 
 	// Standard: + truthsayer + ubs
 	if level == LevelStandard || level == LevelDeep {
-		tsResult := gates.RunTruthsayer(ctx, absPath, 60)
-		results = append(results, tsResult)
+		if level == LevelStandard {
+			// PR-friendly gate: changed-lines/files focus.
+			tsResult := gates.RunTruthsayerCI(ctx, absPath, 60)
+			results = append(results, tsResult)
 
-		ubsResult := gates.RunUBS(ctx, absPath, 60)
-		results = append(results, ubsResult)
+			ubsResult := gates.RunUBSDiff(ctx, absPath, 60)
+			results = append(results, ubsResult)
+		} else {
+			// Deep gate: full scans.
+			tsResult := gates.RunTruthsayer(ctx, absPath, 60)
+			results = append(results, tsResult)
+
+			ubsResult := gates.RunUBS(ctx, absPath, 60)
+			results = append(results, ubsResult)
+		}
 	}
 
 	// Deep: + risk scoring (placeholder for now)
@@ -79,6 +91,7 @@ func Run(ctx context.Context, repoPath, level, citizen string) verdict.Verdict {
 
 	return verdict.Verdict{
 		Pass:     allPass,
+		Score:    verdict.ComputeScore(results),
 		Level:    level,
 		Citizen:  citizen,
 		Repo:     repoName,

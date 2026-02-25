@@ -22,12 +22,33 @@ type Findings struct {
 // Verdict is the final output of a gate check run.
 type Verdict struct {
 	Pass     bool         `json:"pass"`
+	Score    float64      `json:"score"`
 	Level    string       `json:"level"`
 	Citizen  string       `json:"citizen"`
 	Repo     string       `json:"repo"`
 	Gates    []GateResult `json:"gates"`
 	ExitCode int          `json:"exit_code"`
 	Bead     string       `json:"bead,omitempty"`
+}
+
+// ComputeScore calculates a quality score from gate results.
+// The score is the ratio of passing gates to applicable (non-skipped) gates.
+// If all gates are skipped, the score is 1.0 (nothing to fail on).
+func ComputeScore(gates []GateResult) float64 {
+	var applicable, passed int
+	for _, g := range gates {
+		if g.Skipped {
+			continue
+		}
+		applicable++
+		if g.Pass {
+			passed++
+		}
+	}
+	if applicable == 0 {
+		return 1.0
+	}
+	return float64(passed) / float64(applicable)
 }
 
 // ExitPass means all gates passed.

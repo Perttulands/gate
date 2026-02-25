@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -282,7 +283,7 @@ func normalizePolisPath(p string) (string, error) {
 func normalizeHookPath(p string) (string, error) {
 	clean, err := normalizePolisPath(p)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("invalid hook path: %w", err)
 	}
 	if strings.HasSuffix(clean, "/") {
 		return "", fmt.Errorf("hook file cannot be a directory path")
@@ -417,8 +418,8 @@ func isolatedEnv() []string {
 	keys := []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM"}
 	env := make([]string, 0, len(keys))
 	for _, key := range keys {
-		val := os.Getenv(key)
-		if val != "" {
+		val, ok := os.LookupEnv(key)
+		if ok && val != "" {
 			env = append(env, key+"="+val)
 		}
 	}
@@ -466,6 +467,7 @@ func checkHooks(cfg Config, installAt string) (string, string) {
 			target := filepath.Join(installAt, filepath.FromSlash(h.File))
 			info, err := os.Lstat(target)
 			if err != nil {
+				log.Printf("checkHooks: lstat failed for %s: %v", target, err)
 				problems = append(problems, fmt.Sprintf("%s fallback=fail but file missing at install path", h.File))
 				continue
 			}
@@ -499,6 +501,7 @@ func checkSplit(polisFiles []string, installAt string) (string, string) {
 		case hasGlobMeta(entry):
 			ok, err := hasGlobMatch(installAt, entry)
 			if err != nil {
+				log.Printf("checkSplit: glob match failed for %s: %v", entry, err)
 				missing = append(missing, fmt.Sprintf("%s check failed: %v", entry, err))
 				continue
 			}
@@ -510,6 +513,7 @@ func checkSplit(polisFiles []string, installAt string) (string, string) {
 			target := filepath.Join(installAt, filepath.FromSlash(rel))
 			info, err := os.Lstat(target)
 			if err != nil {
+				log.Printf("checkSplit: missing directory %s: %v", target, err)
 				missing = append(missing, fmt.Sprintf("%s missing at %s", entry, target))
 				continue
 			}
@@ -524,6 +528,7 @@ func checkSplit(polisFiles []string, installAt string) (string, string) {
 			target := filepath.Join(installAt, filepath.FromSlash(entry))
 			info, err := os.Lstat(target)
 			if err != nil {
+				log.Printf("checkSplit: missing file %s: %v", target, err)
 				missing = append(missing, fmt.Sprintf("%s missing at %s", entry, target))
 				continue
 			}
@@ -544,16 +549,15 @@ func checkSplit(polisFiles []string, installAt string) (string, string) {
 }
 
 func modeKind(m fs.FileMode) string {
-	switch {
-	case m.IsDir():
-		return "directory"
-	case m.IsRegular():
-		return "file"
-	case m&os.ModeSymlink != 0:
-		return "symlink"
-	default:
-		return "non-regular"
+	kind := "non-regular"
+	if m.IsDir() {
+		kind = "directory"
+	} else if m.IsRegular() {
+		kind = "file"
+	} else if m&os.ModeSymlink != 0 {
+		kind = "symlink"
 	}
+	return kind
 }
 
 func hasGlobMatch(root, pattern string) (bool, error) {
@@ -562,11 +566,11 @@ func hasGlobMatch(root, pattern string) (bool, error) {
 
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return fmt.Errorf("walk %s: %w", p, err)
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
-			return err
+			return fmt.Errorf("rel path %s: %w", p, err)
 		}
 		if rel == "." {
 			return nil

@@ -2,46 +2,42 @@ package gates
 
 import (
 	"testing"
-
-	"polis/gate/internal/verdict"
 )
 
-func TestParseTruthsayerOutput_SummaryLine(t *testing.T) {
-	output := `ERROR   silent-fallback.ignored-error
-  file.go:10
-  > bad code
-
-WARN    bad-defaults.unvalidated-env-go
-  file.go:20
-  > os.Getenv
-
-INFO    trace-gaps.no-stderr-capture
-  file.go:30
-  > exec.Command
-
-──────────────────────────────────────────────────
-Summary: 1 error, 1 warning, 1 info (5 files scanned in 2ms)
-Categories: bad-defaults: 1`
-
+func TestParseTruthsayerOutput_JSON(t *testing.T) {
+	output := `{
+  "version": "1",
+  "summary": {
+    "total": 6,
+    "errors": 3,
+    "warnings": 2,
+    "info": 1
+  }
+}`
 	f := parseTruthsayerOutput(output)
-	want := verdict.Findings{Errors: 1, Warnings: 1, Info: 1}
-	if f != want {
-		t.Errorf("got %+v, want %+v", f, want)
+	if f.Errors != 3 || f.Warnings != 2 || f.Info != 1 {
+		t.Errorf("got %+v, want errors=3 warnings=2 info=1", f)
 	}
 }
 
-func TestParseTruthsayerOutput_MultipleErrors(t *testing.T) {
-	output := `Summary: 3 errors, 2 warnings, 10 info (11 files scanned in 3ms)
-Categories: bad-defaults: 10`
+func TestParseTruthsayerOutput_JSONWithLeadingLogs(t *testing.T) {
+	output := `INFO scanning...
+{
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "info": 2
+  }
+}`
 
 	f := parseTruthsayerOutput(output)
-	if f.Errors != 3 || f.Warnings != 2 || f.Info != 10 {
-		t.Errorf("got %+v, want errors=3 warnings=2 info=10", f)
+	if f.Errors != 0 || f.Warnings != 1 || f.Info != 2 {
+		t.Errorf("got %+v, want errors=0 warnings=1 info=2", f)
 	}
 }
 
 func TestParseTruthsayerOutput_ZeroErrors(t *testing.T) {
-	output := `Summary: 0 errors, 0 warnings, 0 info (5 files scanned in 1ms)`
+	output := `{"summary":{"errors":0,"warnings":0,"info":0}}`
 	f := parseTruthsayerOutput(output)
 	if f.Errors != 0 || f.Warnings != 0 || f.Info != 0 {
 		t.Errorf("got %+v, want all zeros", f)
@@ -70,5 +66,126 @@ func TestParseTruthsayerOutput_EmptyOutput(t *testing.T) {
 	f := parseTruthsayerOutput("")
 	if f.Errors != 0 || f.Warnings != 0 || f.Info != 0 {
 		t.Errorf("expected all zeros for empty output, got %+v", f)
+	}
+}
+
+func TestParseTruthsayerOutput_FullJSONWithFindings(t *testing.T) {
+	// Real-world output: JSON object with both findings array and summary.
+	output := `{
+  "version": "1",
+  "scan_time": "2026-02-25T20:19:07Z",
+  "path": ".",
+  "duration_ms": 21,
+  "findings": [
+    {
+      "rule": "trace-gaps.no-stderr-capture",
+      "severity": "error",
+      "file": "cmd/gate/main.go",
+      "line": 382,
+      "message": "exec.Command used without stderr capture"
+    },
+    {
+      "rule": "bad-defaults.magic-number",
+      "severity": "warning",
+      "file": "internal/gates/lint.go",
+      "line": 63,
+      "message": "Magic number used directly"
+    },
+    {
+      "rule": "trace-gaps.long-function-no-log",
+      "severity": "info",
+      "file": "internal/gates/lint.go",
+      "line": 20,
+      "message": "Function DetectLinters has no logging"
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "errors": 1,
+    "warnings": 1,
+    "info": 1,
+    "files_scanned": 19,
+    "duration_ms": 21
+  }
+}`
+
+	f := parseTruthsayerOutput(output)
+	if f.Errors != 1 {
+		t.Errorf("expected 1 error, got %d", f.Errors)
+	}
+	if f.Warnings != 1 {
+		t.Errorf("expected 1 warning, got %d", f.Warnings)
+	}
+	if f.Info != 1 {
+		t.Errorf("expected 1 info, got %d", f.Info)
+	}
+}
+
+func TestParseTruthsayerOutput_FindingsArrayWithoutSummary(t *testing.T) {
+	// Edge case: JSON has findings but zero summary (unlikely but defensive).
+	output := `{
+  "findings": [
+    {"severity": "error", "message": "a"},
+    {"severity": "error", "message": "b"},
+    {"severity": "warning", "message": "c"}
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "info": 0
+  }
+}`
+
+	f := parseTruthsayerOutput(output)
+	// Summary is all zeros but findings exist, so we count from findings.
+	if f.Errors != 2 {
+		t.Errorf("expected 2 errors from findings, got %d", f.Errors)
+	}
+	if f.Warnings != 1 {
+		t.Errorf("expected 1 warning from findings, got %d", f.Warnings)
+	}
+}
+
+func TestParseTruthsayerOutput_JSONWithTrailingText(t *testing.T) {
+	// JSON followed by trailing text — decoder should stop at object boundary.
+	output := `{
+  "summary": {"errors": 5, "warnings": 3, "info": 10}
+}
+Some trailing log line
+Another trailing line`
+
+	f := parseTruthsayerOutput(output)
+	if f.Errors != 5 || f.Warnings != 3 || f.Info != 10 {
+		t.Errorf("got %+v, want errors=5 warnings=3 info=10", f)
+	}
+}
+
+func TestParseTruthsayerOutput_BannerThenJSON(t *testing.T) {
+	// Simulates output with multiple non-JSON lines then the JSON blob.
+	output := `truthsayer v3.2.1
+scanning 42 files...
+language: go
+{
+  "summary": {"errors": 2, "warnings": 0, "info": 7}
+}`
+
+	f := parseTruthsayerOutput(output)
+	if f.Errors != 2 || f.Warnings != 0 || f.Info != 7 {
+		t.Errorf("got %+v, want errors=2 warnings=0 info=7", f)
+	}
+}
+
+func TestParseTruthsayerOutput_MalformedJSON(t *testing.T) {
+	// Invalid JSON should fall through to text fallback.
+	output := `{invalid json}
+ERROR bad.thing
+WARN minor.thing`
+
+	f := parseTruthsayerOutput(output)
+	if f.Errors != 1 {
+		t.Errorf("expected 1 error from fallback, got %d", f.Errors)
+	}
+	if f.Warnings != 1 {
+		t.Errorf("expected 1 warning from fallback, got %d", f.Warnings)
 	}
 }

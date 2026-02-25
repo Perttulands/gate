@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,31 +17,39 @@ import (
 	"polis/gate/internal/verdict"
 )
 
+const defaultHistoryLimit = 20
+
+var filterValueRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 func main() {
-	os.Exit(run(os.Args[1:]))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	os.Exit(run(ctx, os.Args[1:]))
 }
 
-func run(args []string) int {
+func run(ctx context.Context, args []string) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		printUsage()
 		return 0
 	}
 
-	switch args[0] {
-	case "check":
-		return runCheck(args[1:])
-	case "city":
-		return runCity(args[1:])
-	case "history":
-		return runHistory(args[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
-		printUsage()
-		return 1
+	cmd := args[0]
+	if cmd == "check" {
+		return runCheck(ctx, args[1:])
 	}
+	if cmd == "city" {
+		return runCity(ctx, args[1:])
+	}
+	if cmd == "history" {
+		return runHistory(args[1:])
+	}
+
+	fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
+	printUsage()
+	return 1
 }
 
-func runCheck(args []string) int {
+func runCheck(ctx context.Context, args []string) int {
 	var repoPath, level, citizen string
 	var jsonOutput bool
 
@@ -86,17 +95,9 @@ func runCheck(args []string) int {
 		return 1
 	}
 
-	if citizen == "" {
-		citizen = os.Getenv("POLIS_CITIZEN")
-	}
-	if citizen == "" {
-		citizen = gitUserName()
-	}
-	if citizen == "" {
-		citizen = "unknown"
-	}
+	citizen = resolveCitizen(citizen)
 
-	v := pipeline.Run(context.Background(), repoPath, level, citizen)
+	v := pipeline.Run(ctx, repoPath, level, citizen)
 
 	if beadID := bead.Record(v); beadID != "" {
 		v.Bead = beadID
@@ -113,7 +114,7 @@ func runCheck(args []string) int {
 	return v.ExitCode
 }
 
-func runCity(args []string) int {
+func runCity(ctx context.Context, args []string) int {
 	var repoPath, installAt, citizen string
 	var jsonOutput, skipStandalone bool
 	standaloneTimeout := 120 * time.Second
@@ -168,17 +169,9 @@ func runCity(args []string) int {
 		return city.ExitInvalid
 	}
 
-	if citizen == "" {
-		citizen = os.Getenv("POLIS_CITIZEN")
-	}
-	if citizen == "" {
-		citizen = gitUserName()
-	}
-	if citizen == "" {
-		citizen = "unknown"
-	}
+	citizen = resolveCitizen(citizen)
 
-	v := city.Run(context.Background(), repoPath, city.Options{
+	v := city.Run(ctx, repoPath, city.Options{
 		InstallAt:         installAt,
 		SkipStandalone:    skipStandalone,
 		StandaloneTimeout: standaloneTimeout,
@@ -203,8 +196,8 @@ func runHistory(args []string) int {
 		return 1
 	}
 
-	var repo, citizen string
-	limit := 20
+	var repoFilter, assigneeFilter string
+	limit := defaultHistoryLimit
 	i := 0
 	for i < len(args) {
 		switch args[i] {
@@ -214,14 +207,24 @@ func runHistory(args []string) int {
 				fmt.Fprintln(os.Stderr, "--repo requires a value")
 				return 1
 			}
-			repo = args[i]
+			v, err := validateFilterValue("--repo", args[i])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			repoFilter = v
 		case "--citizen":
 			i++
 			if i >= len(args) {
 				fmt.Fprintln(os.Stderr, "--citizen requires a value")
 				return 1
 			}
-			citizen = args[i]
+			v, err := validateFilterValue("--citizen", args[i])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			assigneeFilter = v
 		case "--limit":
 			i++
 			if i >= len(args) {
@@ -244,11 +247,11 @@ func runHistory(args []string) int {
 	}
 
 	bdArgs := []string{"search", "gate", "--type", "gate", "--sort", "created", "--reverse", "--limit", strconv.Itoa(limit)}
-	if repo != "" {
-		bdArgs = append(bdArgs, "--label", "repo:"+repo)
+	if repoFilter != "" {
+		bdArgs = append(bdArgs, "--label", "repo:"+repoFilter)
 	}
-	if citizen != "" {
-		bdArgs = append(bdArgs, "--assignee", citizen)
+	if assigneeFilter != "" {
+		bdArgs = append(bdArgs, "--assignee", assigneeFilter)
 	}
 
 	cmd := exec.Command("bd", bdArgs...)
@@ -262,6 +265,34 @@ func runHistory(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func resolveCitizen(explicit string) string {
+	explicit = strings.TrimSpace(explicit)
+	if explicit != "" {
+		return explicit
+	}
+	if envVal, ok := os.LookupEnv("POLIS_CITIZEN"); ok {
+		envVal = strings.TrimSpace(envVal)
+		if envVal != "" {
+			return envVal
+		}
+	}
+	if gitName := gitUserName(); gitName != "" {
+		return gitName
+	}
+	return "unknown"
+}
+
+func validateFilterValue(flagName, raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", fmt.Errorf("%s value cannot be empty", flagName)
+	}
+	if !filterValueRe.MatchString(v) {
+		return "", fmt.Errorf("%s must match %s", flagName, filterValueRe.String())
+	}
+	return v, nil
 }
 
 func printUsage() {
@@ -295,7 +326,7 @@ func printPretty(v verdict.Verdict) {
 	if !v.Pass {
 		icon = "\033[31m✗ FAIL\033[0m"
 	}
-	fmt.Printf("\n%s  %s @ %s level\n", icon, v.Repo, v.Level)
+	fmt.Printf("\n%s  %s @ %s level  (score: %.2f)\n", icon, v.Repo, v.Level, v.Score)
 	fmt.Printf("citizen: %s\n\n", v.Citizen)
 
 	for _, g := range v.Gates {
