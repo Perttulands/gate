@@ -61,7 +61,6 @@ func createWithBR(title, labels, description, citizen string) string {
 	return strings.TrimSpace(string(out))
 }
 
-
 func formatCheckDescription(v verdict.Verdict) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("gate check verdict: %s", boolStatus(v.Pass)))

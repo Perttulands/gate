@@ -4,11 +4,11 @@ import "time"
 
 // GateResult is the outcome of a single gate check.
 type GateResult struct {
-	Name       string `json:"name"`
-	Pass       bool   `json:"pass"`
-	Skipped    bool   `json:"skipped,omitempty"`
-	Output     string `json:"output,omitempty"`
-	DurationMs int64  `json:"duration_ms"`
+	Name       string    `json:"name"`
+	Pass       bool      `json:"pass"`
+	Skipped    bool      `json:"skipped,omitempty"`
+	Output     string    `json:"output,omitempty"`
+	DurationMs int64     `json:"duration_ms"`
 	Findings   *Findings `json:"findings,omitempty"`
 }
 
