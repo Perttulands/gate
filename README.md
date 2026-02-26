@@ -42,3 +42,8 @@ gate history [--repo <name>] [--citizen <name>] [--limit N]
 - split on disk at install location (`--install-at`)
 
 See `PRD-city.md` for the prescriptive contract.
+
+## Dependencies
+
+Requires: `truthsayer` -- runs Truthsayer as the code-scanning gate head.
+Optional: `ubs` -- enables deep bug scanning as a third gate head.
