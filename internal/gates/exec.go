@@ -8,8 +8,17 @@ import (
 	"time"
 )
 
-// runCmd runs a command in dir with a timeout. Returns (pass, combined output, error).
+// runCmdFunc is the function used to run commands. Tests can replace this
+// to inject mock behavior without executing real binaries.
+var runCmdFunc = runCmdImpl
+
+// runCmd delegates to runCmdFunc so that tests can swap in a mock.
 func runCmd(ctx context.Context, dir string, timeoutSec int, name string, args ...string) (bool, string, error) {
+	return runCmdFunc(ctx, dir, timeoutSec, name, args...)
+}
+
+// runCmdImpl is the real implementation that executes external commands.
+func runCmdImpl(ctx context.Context, dir string, timeoutSec int, name string, args ...string) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
