@@ -1,5 +1,5 @@
 # Build output
-gate
+/gate
 *.exe
 
 # Polis-owned (city data, layered on when installed — never tracked upstream)
