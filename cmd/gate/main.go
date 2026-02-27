@@ -191,8 +191,8 @@ func runCity(ctx context.Context, args []string) int {
 }
 
 func runHistory(args []string) int {
-	if _, err := exec.LookPath("bd"); err != nil {
-		fmt.Fprintln(os.Stderr, "gate history requires bd (beads) to be installed")
+	if _, err := exec.LookPath("br"); err != nil {
+		fmt.Fprintln(os.Stderr, "gate history requires br (beads) to be installed")
 		return 1
 	}
 
@@ -246,22 +246,22 @@ func runHistory(args []string) int {
 		i++
 	}
 
-	bdArgs := []string{"search", "gate", "--type", "gate", "--sort", "created", "--reverse", "--limit", strconv.Itoa(limit)}
+	brArgs := []string{"search", "gate", "--type", "gate", "--sort", "created", "--reverse", "--limit", strconv.Itoa(limit)}
 	if repoFilter != "" {
-		bdArgs = append(bdArgs, "--label", "repo:"+repoFilter)
+		brArgs = append(brArgs, "--label", "repo:"+repoFilter)
 	}
 	if assigneeFilter != "" {
-		bdArgs = append(bdArgs, "--assignee", assigneeFilter)
+		brArgs = append(brArgs, "--assignee", assigneeFilter)
 	}
 
-	cmd := exec.Command("bd", bdArgs...)
+	cmd := exec.Command("br", brArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode()
 		}
-		fmt.Fprintf(os.Stderr, "bd search failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "br search failed: %v\n", err)
 		return 1
 	}
 	return 0
