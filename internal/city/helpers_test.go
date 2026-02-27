@@ -2,6 +2,8 @@ package city
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -310,4 +312,234 @@ func TestTrimOutput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckHooks(t *testing.T) {
+	t.Run("no hooks declared", func(t *testing.T) {
+		cfg := Config{PolisFiles: []string{"polis.yaml"}}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusPass {
+			t.Fatalf("expected pass, got %s: %s", status, detail)
+		}
+		if detail != "no hooks declared" {
+			t.Fatalf("expected 'no hooks declared', got %q", detail)
+		}
+	})
+
+	t.Run("defaults fallback always valid", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"polis.yaml"},
+			Hooks:      []Hook{{File: "polis.yaml", Fallback: "defaults"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusPass {
+			t.Fatalf("expected pass, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "1 hooks sound") {
+			t.Fatalf("expected '1 hooks sound', got %q", detail)
+		}
+	})
+
+	t.Run("valid env fallback", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "env:POLIS_API_KEY"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusPass {
+			t.Fatalf("expected pass, got %s: %s", status, detail)
+		}
+	})
+
+	t.Run("valid env fallback underscore prefix", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "env:_PRIVATE_VAR"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusPass {
+			t.Fatalf("expected pass, got %s: %s", status, detail)
+		}
+	})
+
+	t.Run("invalid env fallback lowercase", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "env:lower_case"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "invalid env fallback") {
+			t.Fatalf("expected invalid env fallback message, got %q", detail)
+		}
+	})
+
+	t.Run("invalid env fallback empty name", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "env:"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "invalid env fallback") {
+			t.Fatalf("expected invalid env fallback message, got %q", detail)
+		}
+	})
+
+	t.Run("invalid fallback string rejected", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"polis.yaml"},
+			Hooks:      []Hook{{File: "polis.yaml", Fallback: "something-wrong"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "invalid fallback") {
+			t.Fatalf("expected invalid fallback message, got %q", detail)
+		}
+	})
+
+	t.Run("empty fallback rejected", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"polis.yaml"},
+			Hooks:      []Hook{{File: "polis.yaml", Fallback: ""}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "invalid fallback") {
+			t.Fatalf("expected invalid fallback message, got %q", detail)
+		}
+	})
+
+	t.Run("hook file not in polis_files", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"other.yaml"},
+			Hooks:      []Hook{{File: "missing.yaml", Fallback: "defaults"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "not listed in polis_files") {
+			t.Fatalf("expected 'not listed in polis_files', got %q", detail)
+		}
+	})
+
+	t.Run("fallback fail without install-at", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "fail"}},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "requires --install-at") {
+			t.Fatalf("expected install-at guidance, got %q", detail)
+		}
+	})
+
+	t.Run("fallback fail with missing file", func(t *testing.T) {
+		install := t.TempDir()
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "fail"}},
+		}
+		status, detail := checkHooks(cfg, install)
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "file missing at install path") {
+			t.Fatalf("expected missing file message, got %q", detail)
+		}
+	})
+
+	t.Run("fallback fail with file present", func(t *testing.T) {
+		install := t.TempDir()
+		if err := os.WriteFile(filepath.Join(install, ".secrets"), []byte("ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "fail"}},
+		}
+		status, detail := checkHooks(cfg, install)
+		if status != StatusPass {
+			t.Fatalf("expected pass, got %s: %s", status, detail)
+		}
+	})
+
+	t.Run("fallback fail with symlink rejected", func(t *testing.T) {
+		install := t.TempDir()
+		real := filepath.Join(install, "real.txt")
+		if err := os.WriteFile(real, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(real, filepath.Join(install, ".secrets")); err != nil {
+			t.Fatal(err)
+		}
+		cfg := Config{
+			PolisFiles: []string{".secrets"},
+			Hooks:      []Hook{{File: ".secrets", Fallback: "fail"}},
+		}
+		status, detail := checkHooks(cfg, install)
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "symlink") {
+			t.Fatalf("expected symlink message, got %q", detail)
+		}
+	})
+
+	t.Run("multiple hooks mixed results", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"polis.yaml", ".secrets"},
+			Hooks: []Hook{
+				{File: "polis.yaml", Fallback: "defaults"},
+				{File: ".secrets", Fallback: "bogus"},
+			},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusFail {
+			t.Fatalf("expected fail, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "invalid fallback") {
+			t.Fatalf("expected invalid fallback in detail, got %q", detail)
+		}
+	})
+
+	t.Run("multiple hooks all valid", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"polis.yaml", ".secrets"},
+			Hooks: []Hook{
+				{File: "polis.yaml", Fallback: "defaults"},
+				{File: ".secrets", Fallback: "env:API_KEY"},
+			},
+		}
+		status, detail := checkHooks(cfg, "")
+		if status != StatusPass {
+			t.Fatalf("expected pass, got %s: %s", status, detail)
+		}
+		if !strings.Contains(detail, "2 hooks sound") {
+			t.Fatalf("expected '2 hooks sound', got %q", detail)
+		}
+	})
+
+	t.Run("polis_files with dir suffix matches hook", func(t *testing.T) {
+		cfg := Config{
+			PolisFiles: []string{"memory/"},
+			Hooks:      []Hook{{File: "memory", Fallback: "defaults"}},
+		}
+		status, _ := checkHooks(cfg, "")
+		if status != StatusPass {
+			t.Fatalf("expected pass: dir-suffix polis_files should match hook file without slash")
+		}
+	})
 }
