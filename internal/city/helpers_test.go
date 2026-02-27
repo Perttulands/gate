@@ -193,6 +193,26 @@ func TestMatchGlobPattern(t *testing.T) {
 		{"question mark no match", "file?.txt", "file12.txt", false},
 		{"directory glob", "memory/**", "memory/entry.txt", true},
 		{"directory glob nested", "memory/**", "memory/sub/entry.txt", true},
+
+		// --- additional edge cases ---
+		{"bracket char class", "file[0-9].txt", "file3.txt", true},
+		{"bracket char class no match", "file[0-9].txt", "fileA.txt", false},
+		{"double star at start", "**/main.go", "src/pkg/main.go", true},
+		{"double star at start shallow", "**/main.go", "main.go", true},
+		{"double star at start no match", "**/main.go", "src/main.txt", false},
+		{"multiple wildcards", "src/**/test/*.go", "src/pkg/test/foo.go", true},
+		{"multiple wildcards deep", "src/**/test/*.go", "src/a/b/test/bar.go", true},
+		{"multiple wildcards no match", "src/**/test/*.go", "src/pkg/prod/foo.go", false},
+		{"empty rel no match", "*.txt", "", false},
+		{"double star matches zero segments", "src/**", "src", true},
+		{"star does not cross slash", "src/*", "src/a/b.go", false},
+		{"exact nested match", "a/b/c.txt", "a/b/c.txt", true},
+		{"exact nested no match", "a/b/c.txt", "a/b/d.txt", false},
+		{"double star zero segments", "a/**/b.txt", "a/b.txt", true},
+		{"double star one segment", "a/**/b.txt", "a/x/b.txt", true},
+		{"double star many segments", "a/**/b.txt", "a/x/y/z/b.txt", true},
+		{"pattern longer than rel", "a/b/c/d", "a/b", false},
+		{"rel longer than pattern", "a/b", "a/b/c/d", false},
 	}
 
 	for _, tt := range tests {
