@@ -27,6 +27,23 @@ func TestNormalizePolisPath(t *testing.T) {
 		{"parent dir", "..", "", true},
 		{"traversal prefix", "../secret", "", true},
 		{"traversal nested", "a/../../secret", "", true},
+
+		// --- additional edge cases ---
+		{"deeply nested path", "a/b/c/d/e/f.txt", "a/b/c/d/e/f.txt", false},
+		{"mixed separators", `a\b/c\d.txt`, "a/b/c/d.txt", false},
+		{"dot in filename", "config/.hidden", "config/.hidden", false},
+		{"multiple extensions", "file.tar.gz", "file.tar.gz", false},
+		{"trailing dot cleaned", "config/./", "config/", false},
+		{"redundant separators", "a///b///c", "a/b/c", false},
+		{"glob question mark", "dir/file?.txt", "dir/file?.txt", false},
+		{"glob bracket range", "dir/file[0-9].txt", "dir/file[0-9].txt", false},
+		{"tilde not special", "~/config", "~/config", false},
+		{"single char filename", "x", "x", false},
+		{"dir marker preserved after clean", "a/./b/", "a/b/", false},
+		{"tab in whitespace", "\t polis.yaml \t", "polis.yaml", false},
+		{"absolute windows-style", `\absolute`, "", true},
+		{"traversal mid path", "a/b/../../../secret", "", true},
+		{"dot slash only", "./", "", true},
 	}
 
 	for _, tt := range tests {
@@ -58,6 +75,16 @@ func TestNormalizeHookPath(t *testing.T) {
 		{"glob bracket rejected", "file[0].txt", "", true},
 		{"empty rejected", "", "", true},
 		{"absolute rejected", "/etc/file", "", true},
+
+		// --- additional edge cases ---
+		{"deeply nested valid", "a/b/c/hook.sh", "a/b/c/hook.sh", false},
+		{"dot file valid", ".secrets", ".secrets", false},
+		{"backslash normalized", `hooks\run.sh`, "hooks/run.sh", false},
+		{"whitespace trimmed", "  hook.yaml  ", "hook.yaml", false},
+		{"double star glob rejected", "src/**/*.go", "", true},
+		{"traversal rejected", "../hook.sh", "", true},
+		{"current dir rejected", ".", "", true},
+		{"whitespace only rejected", "   ", "", true},
 	}
 
 	for _, tt := range tests {
