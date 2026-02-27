@@ -131,3 +131,82 @@ func TestDetectLinters_NodeNoESLint(t *testing.T) {
 		}
 	}
 }
+
+func TestDetectLinters_PythonRuff_PyFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte("print('hi')"), 0644)
+
+	linters := DetectLinters(dir)
+	found := false
+	for _, l := range linters {
+		if l.name == "ruff" {
+			found = true
+			if l.cmd[0] != "ruff" || l.cmd[1] != "check" {
+				t.Fatalf("expected ruff check, got %v", l.cmd)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected ruff detection for .py files")
+	}
+}
+
+func TestDetectLinters_PythonRuff_SetupPy(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "setup.py"), []byte(""), 0644)
+
+	linters := DetectLinters(dir)
+	found := false
+	for _, l := range linters {
+		if l.name == "ruff" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected ruff detection for setup.py")
+	}
+}
+
+func TestDetectLinters_PythonRuff_PyprojectToml(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(""), 0644)
+
+	linters := DetectLinters(dir)
+	found := false
+	for _, l := range linters {
+		if l.name == "ruff" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected ruff detection for pyproject.toml")
+	}
+}
+
+func TestDetectLinters_PythonRuff_SrcDir(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "src"), 0755)
+
+	linters := DetectLinters(dir)
+	found := false
+	for _, l := range linters {
+		if l.name == "ruff" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected ruff detection for src/ directory")
+	}
+}
+
+func TestDetectLinters_NoPython_NoRuff(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0644)
+
+	linters := DetectLinters(dir)
+	for _, l := range linters {
+		if l.name == "ruff" {
+			t.Fatal("should not detect ruff in non-Python project")
+		}
+	}
+}
