@@ -58,6 +58,32 @@ func TestDetectTestSuite_Rust(t *testing.T) {
 	}
 }
 
+func TestDetectTestSuite_PythonSetupPy(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "setup.py"), []byte(""), 0644)
+
+	cmd := DetectTestSuite(dir)
+	if cmd == nil {
+		t.Fatal("expected pytest detection for setup.py")
+	}
+	if cmd[0] != "pytest" {
+		t.Fatalf("expected pytest, got %v", cmd)
+	}
+}
+
+func TestDetectTestSuite_Bats(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "smoke.bats"), []byte("@test 'works' { true; }"), 0644)
+
+	cmd := DetectTestSuite(dir)
+	if cmd == nil {
+		t.Fatal("expected bats detection")
+	}
+	if cmd[0] != "bats" {
+		t.Fatalf("expected bats, got %v", cmd)
+	}
+}
+
 func TestDetectTestSuite_None(t *testing.T) {
 	dir := t.TempDir()
 	cmd := DetectTestSuite(dir)
