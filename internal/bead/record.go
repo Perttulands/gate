@@ -1,6 +1,7 @@
 package bead
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -18,25 +19,107 @@ var (
 )
 
 // Record creates a bead for a gate check verdict.
+// Fail-only: pass verdicts create no bead (and auto-resolve any open fail bead).
+// Dedup: fail verdicts reuse an existing open fail bead if one exists.
 func Record(v verdict.Verdict) string {
+	if _, err := lookPath("br"); err != nil {
+		return ""
+	}
+
 	status := "pass"
 	if !v.Pass {
 		status = "fail"
 	}
-
 	title := fmt.Sprintf("%s gate %s: %s", v.Repo, v.Level, status)
+
+	// Pass: resolve any open fail bead, create nothing.
+	if v.Pass {
+		resolveOpenFailBead(v.Repo, v.Level, title)
+		return ""
+	}
+
+	// Fail: deduplicate.
+	if existing := findOpenFailBead(v.Repo, v.Level); existing != "" {
+		return existing
+	}
+
 	labels := fmt.Sprintf("tool:gate,status:%s,repo:%s,level:%s", status, v.Repo, v.Level)
 	description := formatCheckDescription(v)
-
 	return createWithBR(title, labels, description, v.Citizen)
 }
 
 // RecordCity creates a bead for a gate city verdict.
+// Fail-only: non-fail verdicts create no bead (and auto-resolve any open fail bead).
+// Dedup: fail verdicts reuse an existing open fail bead if one exists.
 func RecordCity(v city.Verdict, citizen string) string {
+	if _, err := lookPath("br"); err != nil {
+		return ""
+	}
+
 	title := fmt.Sprintf("gate city: %s (%s)", v.Repo, v.Status)
+
+	// Non-fail (pass/warn): resolve any open fail bead, create nothing.
+	if v.Status != "fail" {
+		resolveOpenFailBead(v.Repo, "", title)
+		return ""
+	}
+
+	// Fail: deduplicate.
+	if existing := findOpenFailBead(v.Repo, ""); existing != "" {
+		return existing
+	}
+
 	labels := fmt.Sprintf("tool:gate,kind:city,status:%s,repo:%s", v.Status, v.Repo)
 	description := formatCityDescription(v)
 	return createWithBR(title, labels, description, citizen)
+}
+
+// findOpenFailBead searches for an existing open fail bead for the given repo.
+// For check verdicts pass the level; for city verdicts pass "" (searches kind:city instead).
+func findOpenFailBead(repo, level string) string {
+	args := []string{
+		"search", "gate",
+		"--label", "tool:gate",
+		"--label", "repo:" + repo,
+		"--label", "status:fail",
+		"--status", "open",
+		"--json",
+	}
+	if level != "" {
+		args = append(args, "--label", "level:"+level)
+	} else {
+		args = append(args, "--label", "kind:city")
+	}
+	out, err := runCmd("br", args...)
+	if err != nil {
+		return ""
+	}
+	return parseFirstBeadID(string(out))
+}
+
+// resolveOpenFailBead finds and closes any open fail bead for the given repo.
+func resolveOpenFailBead(repo, level, summary string) {
+	id := findOpenFailBead(repo, level)
+	if id == "" {
+		return
+	}
+	reason := fmt.Sprintf("Gate now passing: %s", summary)
+	runCmd("br", "close", id, "--reason", reason)
+}
+
+type brSearchResult struct {
+	ID string `json:"id"`
+}
+
+func parseFirstBeadID(jsonOutput string) string {
+	var results []brSearchResult
+	if err := json.Unmarshal([]byte(jsonOutput), &results); err != nil {
+		return ""
+	}
+	if len(results) == 0 {
+		return ""
+	}
+	return results[0].ID
 }
 
 func createWithBR(title, labels, description, citizen string) string {
