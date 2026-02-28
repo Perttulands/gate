@@ -123,6 +123,161 @@ func TestRecord_NoToolReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestFormatCheckDescription_IncludesGates(t *testing.T) {
+	v := verdict.Verdict{
+		Pass:  false,
+		Level: "standard",
+		Repo:  "test-repo",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true, DurationMs: 100},
+			{Name: "lint:go vet", Pass: false, DurationMs: 50},
+			{Name: "truthsayer", Pass: true, Skipped: true, DurationMs: 0},
+		},
+	}
+
+	out := formatCheckDescription(v)
+
+	if !strings.Contains(out, "gate check verdict: fail") {
+		t.Fatalf("expected verdict status, got: %q", out)
+	}
+	if !strings.Contains(out, "repo: test-repo") {
+		t.Fatalf("expected repo, got: %q", out)
+	}
+	if !strings.Contains(out, "level: standard") {
+		t.Fatalf("expected level, got: %q", out)
+	}
+	if !strings.Contains(out, "- tests: pass") {
+		t.Fatalf("expected tests gate, got: %q", out)
+	}
+	if !strings.Contains(out, "- lint:go vet: fail") {
+		t.Fatalf("expected lint failure, got: %q", out)
+	}
+	if !strings.Contains(out, "- truthsayer: skip") {
+		t.Fatalf("expected truthsayer skip, got: %q", out)
+	}
+}
+
+func TestFormatCheckDescription_PassVerdict(t *testing.T) {
+	v := verdict.Verdict{
+		Pass:  true,
+		Level: "quick",
+		Repo:  "gate",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true, DurationMs: 200},
+		},
+	}
+
+	out := formatCheckDescription(v)
+
+	if !strings.Contains(out, "gate check verdict: pass") {
+		t.Fatalf("expected pass verdict, got: %q", out)
+	}
+}
+
+func TestNormalizeLabels(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"c,b,a", "a,b,c"},
+		{"tool:gate,status:pass,repo:x", "repo:x,status:pass,tool:gate"},
+		{"single", "single"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeLabels(tt.input)
+			if got != tt.want {
+				t.Fatalf("normalizeLabels(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecord_FailureVerdictTitle(t *testing.T) {
+	defer resetHooksForTest()
+
+	var capturedArgs []string
+	lookPath = func(name string) (string, error) {
+		if name == "br" {
+			return "/usr/bin/br", nil
+		}
+		return "", errors.New("missing")
+	}
+	runCmd = func(name string, args ...string) ([]byte, error) {
+		capturedArgs = append([]string{}, args...)
+		return []byte("pol-fail-1\n"), nil
+	}
+
+	id := Record(verdict.Verdict{
+		Pass:    false,
+		Level:   "deep",
+		Citizen: "auditor",
+		Repo:    "relay",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true, DurationMs: 100},
+			{Name: "lint:go vet", Pass: false, DurationMs: 50},
+		},
+	})
+
+	if id != "pol-fail-1" {
+		t.Fatalf("expected pol-fail-1, got %q", id)
+	}
+
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "relay gate deep: fail") {
+		t.Fatalf("expected failure title, got: %s", joined)
+	}
+	if !strings.Contains(joined, "status:fail") {
+		t.Fatalf("expected status:fail label, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-a auditor") {
+		t.Fatalf("expected assignee, got: %s", joined)
+	}
+}
+
+func TestRecord_UnknownCitizenSkipsAssignee(t *testing.T) {
+	defer resetHooksForTest()
+
+	var capturedArgs []string
+	lookPath = func(name string) (string, error) {
+		return "/usr/bin/br", nil
+	}
+	runCmd = func(name string, args ...string) ([]byte, error) {
+		capturedArgs = append([]string{}, args...)
+		return []byte("pol-1\n"), nil
+	}
+
+	Record(verdict.Verdict{
+		Pass:    true,
+		Level:   "quick",
+		Citizen: "unknown",
+		Repo:    "test",
+	})
+
+	joined := strings.Join(capturedArgs, " ")
+	if strings.Contains(joined, "-a") {
+		t.Fatalf("expected no assignee for unknown citizen, got: %s", joined)
+	}
+}
+
+func TestCreateWithBR_CommandFails(t *testing.T) {
+	defer resetHooksForTest()
+
+	lookPath = func(name string) (string, error) {
+		return "/usr/bin/br", nil
+	}
+	runCmd = func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("br crashed")
+	}
+
+	id := Record(verdict.Verdict{Pass: true, Level: "quick", Repo: "x"})
+	if id != "" {
+		t.Fatalf("expected empty id on br failure, got %q", id)
+	}
+}
+
 func TestFormatCityDescription_IncludesChecks(t *testing.T) {
 	out := formatCityDescription(city.Verdict{
 		Repo:     "relay",

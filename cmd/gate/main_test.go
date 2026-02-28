@@ -1,8 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"polis/gate/internal/city"
+	"polis/gate/internal/verdict"
 )
 
 func TestValidateFilterValue(t *testing.T) {
@@ -194,6 +204,331 @@ func TestRunCity_FlagErrors(t *testing.T) {
 				t.Fatalf("runCity(%v) = %d, want %d", tt.args, code, tt.want)
 			}
 		})
+	}
+}
+
+// --- helpers ---
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	oldOut := os.Stdout
+	oldErr := os.Stderr
+	r, w, _ := os.Pipe()
+	devNull, _ := os.Open(os.DevNull)
+	os.Stdout = w
+	os.Stderr = devNull
+	fn()
+	w.Close()
+	devNull.Close()
+	os.Stdout = oldOut
+	os.Stderr = oldErr
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	return buf.String()
+}
+
+func writeTestFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	target := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+}
+
+func mustRunGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v (%s)", args, err, string(out))
+	}
+}
+
+// --- E2E: runCheck ---
+
+func TestRunCheck_E2E_PassingGoProject(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module passing\n\ngo 1.21\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+
+	output := captureStdout(t, func() {
+		code := runCheck(context.Background(), []string{"--level", "quick", "--json", dir})
+		if code != 0 {
+			t.Errorf("expected exit 0, got %d", code)
+		}
+	})
+
+	var v verdict.Verdict
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &v); err != nil {
+		t.Fatalf("failed to parse JSON output: %v\nraw: %s", err, output)
+	}
+	if !v.Pass {
+		t.Errorf("expected pass, got fail: %+v", v)
+	}
+	if v.Level != "quick" {
+		t.Errorf("expected level quick, got %q", v.Level)
+	}
+	if v.Score <= 0 {
+		t.Errorf("expected positive score, got %f", v.Score)
+	}
+}
+
+func TestRunCheck_E2E_FailingGoProject(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module failing\n\ngo 1.21\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+	writeTestFile(t, dir, "fail_test.go", "package main\nimport \"testing\"\nfunc TestFail(t *testing.T) { t.Fatal(\"intentional\") }\n")
+
+	output := captureStdout(t, func() {
+		code := runCheck(context.Background(), []string{"--level", "quick", "--json", dir})
+		if code != 1 {
+			t.Errorf("expected exit 1, got %d", code)
+		}
+	})
+
+	var v verdict.Verdict
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &v); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if v.Pass {
+		t.Error("expected fail")
+	}
+	if v.ExitCode != 1 {
+		t.Errorf("expected exit_code 1, got %d", v.ExitCode)
+	}
+}
+
+func TestRunCheck_E2E_PrettyOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, "go.mod", "module prettytest\n\ngo 1.21\n")
+	writeTestFile(t, dir, "main.go", "package main\nfunc main() {}\n")
+
+	output := captureStdout(t, func() {
+		code := runCheck(context.Background(), []string{"--level", "quick", "--citizen", "test-user", dir})
+		if code != 0 {
+			t.Errorf("expected exit 0, got %d", code)
+		}
+	})
+
+	if !strings.Contains(output, "PASS") {
+		t.Errorf("expected PASS in output, got: %s", output)
+	}
+	if !strings.Contains(output, "quick") {
+		t.Errorf("expected level in output")
+	}
+	if !strings.Contains(output, "test-user") {
+		t.Errorf("expected citizen in output")
+	}
+}
+
+// --- E2E: runCity ---
+
+func TestRunCity_E2E_JSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, dir, ".gitignore", "polis.yaml\n")
+	writeTestFile(t, dir, "city.toml", "[city]\nschema_version = 1\npolis_files = [\"polis.yaml\"]\nstandalone_check = \"\"\n")
+	mustRunGit(t, dir, "init")
+	mustRunGit(t, dir, "config", "user.email", "test@example.com")
+	mustRunGit(t, dir, "config", "user.name", "test")
+	mustRunGit(t, dir, "add", ".")
+	mustRunGit(t, dir, "commit", "-m", "init")
+
+	output := captureStdout(t, func() {
+		code := runCity(context.Background(), []string{"--skip-standalone", "--json", dir})
+		// exit 0=pass, 2=warn (skipped checks cause warn)
+		if code != 0 && code != 2 {
+			t.Errorf("expected exit 0 or 2, got %d", code)
+		}
+	})
+
+	var v city.Verdict
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &v); err != nil {
+		t.Fatalf("failed to parse JSON: %v\nraw: %s", err, output)
+	}
+	if v.Repo == "" {
+		t.Error("expected repo name in verdict")
+	}
+	if len(v.Checks) == 0 {
+		t.Error("expected at least one check result")
+	}
+}
+
+// --- printPretty ---
+
+func TestPrintPretty_PassVerdict(t *testing.T) {
+	v := verdict.Verdict{
+		Pass:    true,
+		Score:   1.0,
+		Level:   "quick",
+		Repo:    "test-repo",
+		Citizen: "tester",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true, DurationMs: 42},
+			{Name: "lint:go vet", Pass: true, DurationMs: 10},
+		},
+	}
+
+	output := captureStdout(t, func() { printPretty(v) })
+
+	if !strings.Contains(output, "PASS") {
+		t.Errorf("expected PASS in output, got: %s", output)
+	}
+	if !strings.Contains(output, "test-repo") {
+		t.Errorf("expected repo name in output")
+	}
+	if !strings.Contains(output, "quick") {
+		t.Errorf("expected level in output")
+	}
+	if !strings.Contains(output, "tester") {
+		t.Errorf("expected citizen in output")
+	}
+	if !strings.Contains(output, "tests") {
+		t.Errorf("expected gate name in output")
+	}
+}
+
+func TestPrintPretty_FailVerdictShowsOutput(t *testing.T) {
+	v := verdict.Verdict{
+		Pass:  false,
+		Score: 0.5,
+		Level: "standard",
+		Repo:  "fail-repo",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true, DurationMs: 42},
+			{Name: "lint:go vet", Pass: false, Output: "main.go:10: unreachable code", DurationMs: 10},
+		},
+	}
+
+	output := captureStdout(t, func() { printPretty(v) })
+
+	if !strings.Contains(output, "FAIL") {
+		t.Errorf("expected FAIL in output, got: %s", output)
+	}
+	if !strings.Contains(output, "unreachable code") {
+		t.Errorf("expected failure detail in output, got: %s", output)
+	}
+}
+
+func TestPrintPretty_SkippedGate(t *testing.T) {
+	v := verdict.Verdict{
+		Pass: true,
+		Repo: "skip-repo",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true, DurationMs: 10},
+			{Name: "truthsayer", Pass: true, Skipped: true, Output: "not available", DurationMs: 0},
+		},
+	}
+
+	output := captureStdout(t, func() { printPretty(v) })
+
+	if !strings.Contains(output, "truthsayer") {
+		t.Errorf("expected skipped gate name in output")
+	}
+	// Skipped gate output should NOT be shown
+	if strings.Contains(output, "not available") {
+		t.Errorf("skipped gate output should not appear in pretty output")
+	}
+}
+
+func TestPrintPretty_WithBeadID(t *testing.T) {
+	v := verdict.Verdict{
+		Pass: true,
+		Repo: "bead-repo",
+		Bead: "pol-42",
+		Gates: []verdict.GateResult{
+			{Name: "tests", Pass: true},
+		},
+	}
+
+	output := captureStdout(t, func() { printPretty(v) })
+
+	if !strings.Contains(output, "pol-42") {
+		t.Errorf("expected bead ID in output, got: %s", output)
+	}
+}
+
+// --- printPrettyCity ---
+
+func TestPrintPrettyCity_PassVerdict(t *testing.T) {
+	v := city.Verdict{
+		Pass:   true,
+		Status: "pass",
+		Repo:   "pass-city",
+		Checks: []city.CheckResult{
+			{Name: "boundary", Status: city.StatusPass, Detail: "ok", DurationMs: 5},
+		},
+		Summary: city.Summary{Pass: 1},
+	}
+
+	output := captureStdout(t, func() { printPrettyCity(v) })
+
+	if !strings.Contains(output, "PASS") {
+		t.Errorf("expected PASS, got: %s", output)
+	}
+	if !strings.Contains(output, "pass-city") {
+		t.Errorf("expected repo name")
+	}
+	if !strings.Contains(output, "pass=1") {
+		t.Errorf("expected summary, got: %s", output)
+	}
+}
+
+func TestPrintPrettyCity_WarnVerdict(t *testing.T) {
+	v := city.Verdict{
+		Status: "warn",
+		Repo:   "warn-city",
+		Checks: []city.CheckResult{
+			{Name: "standalone", Status: city.StatusSkip, Detail: "skipped", DurationMs: 0},
+		},
+		Summary: city.Summary{Skip: 1},
+	}
+
+	output := captureStdout(t, func() { printPrettyCity(v) })
+
+	if !strings.Contains(output, "WARN") {
+		t.Errorf("expected WARN, got: %s", output)
+	}
+}
+
+func TestPrintPrettyCity_FailVerdict(t *testing.T) {
+	v := city.Verdict{
+		Status: "fail",
+		Repo:   "fail-city",
+		Checks: []city.CheckResult{
+			{Name: "boundary", Status: city.StatusFail, Detail: "not ignored", DurationMs: 3},
+		},
+		Summary: city.Summary{Fail: 1},
+	}
+
+	output := captureStdout(t, func() { printPrettyCity(v) })
+
+	if !strings.Contains(output, "FAIL") {
+		t.Errorf("expected FAIL, got: %s", output)
+	}
+	if !strings.Contains(output, "fail-city") {
+		t.Errorf("expected repo name")
+	}
+	if !strings.Contains(output, "fail=1") {
+		t.Errorf("expected summary, got: %s", output)
+	}
+}
+
+func TestPrintPrettyCity_WithBeadID(t *testing.T) {
+	v := city.Verdict{
+		Status: "pass",
+		Repo:   "bead-city",
+		Bead:   "pol-99",
+		Summary: city.Summary{Pass: 1},
+	}
+
+	output := captureStdout(t, func() { printPrettyCity(v) })
+
+	if !strings.Contains(output, "pol-99") {
+		t.Errorf("expected bead ID, got: %s", output)
 	}
 }
 
